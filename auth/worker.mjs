@@ -81,7 +81,7 @@ async function githubFetch(url, options = {}) {
     try { return JSON.parse(body); } catch { throw new Error('INVALID_JSON'); }
   } catch (error) {
     if (controller.signal.aborted) throw new Error('TIMEOUT');
-    if (/^(REDIRECT_\\d{3}|HTTP_\\d{3}|INVALID_JSON)$/.test(error?.message || '')) throw error;
+    if (/^(REDIRECT_[0-9]{3}|HTTP_[0-9]{3}|INVALID_JSON)$/.test(error?.message || '')) throw error;
     throw new Error('NETWORK');
   } finally { clearTimeout(timer); }
 }
