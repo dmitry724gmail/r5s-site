@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
+import worker from './worker.mjs';
+const base = 'https://r5s-auth.dmitry724.workers.dev';
+const env = { GITHUB_CLIENT_ID: 'test-client', GITHUB_CLIENT_SECRET: 'test-only-not-a-real-credential' };
+const call = (path, cookie, environment = env) => worker.fetch(new Request(base + path, { headers: cookie ? { Cookie: cookie } : {} }), environment);
+assert.equal((await call('/health', null, {})).status, 503);
+assert.equal((await call('/health')).status, 200);
+assert.equal((await call('/auth?provider=github&site_id=evil.example')).status, 400);
+assert.equal((await worker.fetch(new Request('https://evil.example/auth'), env)).status, 400);
+const start = await call('/auth?provider=github&site_id=r5s.ru&scope=repo');
+assert.equal(start.status, 302);
+const target = new URL(start.headers.get('Location'));
+assert.equal(target.origin, 'https://github.com');
+assert.equal(target.searchParams.get('scope'), 'public_repo');
+assert.equal(target.searchParams.get('redirect_uri'), base + '/callback');
+assert.equal(target.searchParams.get('code_challenge_method'), 'S256');
+const cookie = start.headers.get('Set-Cookie').split(';')[0];
+assert.match(start.headers.get('Set-Cookie'), /HttpOnly; Secure; SameSite=Lax/);
+const [state, verifier] = cookie.split('=')[1].split('.');
+const challenge = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))).toString('base64url');
+assert.equal(target.searchParams.get('code_challenge'), challenge);
+let requests = [];
+const originalFetch = globalThis.fetch;
+let mayPush = true;
+globalThis.fetch = async (url, options) => {
+  requests.push({ url, options });
+  if (url.includes('/access_token')) {
+    const body = new URLSearchParams(options.body);
+    assert.equal(body.get('code_verifier'), verifier);
+    assert.equal(body.get('redirect_uri'), base + '/callback');
+    return Response.json({ access_token: 'test-access-token', refresh_token: 'test-refresh-token' });
+  }
+  assert.equal(url, 'https://api.github.com/repos/dmitry724gmail/r5s-site');
+  return Response.json({ full_name: 'dmitry724gmail/r5s-site', permissions: { push: mayPush } });
+};
+try {
+  const callback = '/callback?state=' + state + '&code=test-code';
+  assert.equal((await call(callback)).status, 400);
+  assert.equal((await call('/callback?state=wrong&code=test-code', cookie)).status, 400);
+  const pieces = cookie.split('.');
+  pieces[1] = 'A'.repeat(43);
+  assert.equal((await call(callback, pieces.join('.'))).status, 400);
+  assert.equal(requests.length, 0, 'invalid sessions must not contact GitHub');
+  const realNow = Date.now;
+  Date.now = () => realNow() + 601000;
+  try { assert.equal((await call(callback, cookie)).status, 400); } finally { Date.now = realNow; }
+  const result = await call(callback, cookie);
+  assert.equal(result.status, 200);
+  assert.match(result.headers.get('Set-Cookie'), /Max-Age=0/);
+  assert.match(result.headers.get('Content-Security-Policy'), /frame-ancestors 'none'/);
+  const html = await result.text();
+  assert.ok(!html.includes('test-refresh-token'));
+  assert.ok(!html.includes(env.GITHUB_CLIENT_SECRET));
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)[1];
+  let listener;
+  const messages = [];
+  const opener = { postMessage: (data, origin) => messages.push({ data, origin }) };
+  const window = { opener, addEventListener: (name, fn) => { listener = fn; }, removeEventListener() {} };
+  runInNewContext(script, { window, document: { getElementById: () => ({ textContent: '' }) }, setTimeout: () => 1, clearTimeout() {} });
+  assert.deepEqual(messages, [{ data: 'authorizing:github', origin: 'https://r5s.ru' }]);
+  listener({ origin: 'https://evil.example', source: opener, data: 'authorizing:github' });
+  listener({ origin: 'https://r5s.ru', source: {}, data: 'authorizing:github' });
+  assert.equal(messages.length, 1, 'untrusted message must never receive a token');
+  listener({ origin: 'https://r5s.ru', source: opener, data: 'authorizing:github' });
+  assert.equal(messages[1].origin, 'https://r5s.ru');
+  assert.match(messages[1].data, /^authorization:github:success:/);
+  mayPush = false;
+  const forbidden = await (await call(callback, cookie)).text();
+  assert.ok(!forbidden.includes('test-access-token'));
+  assert.ok(forbidden.includes('authorization:github:error:'));
+  globalThis.fetch = async () => { throw Error('test-only network outage'); };
+  const failed = await (await call(callback, cookie)).text();
+  assert.ok(!failed.includes('test-only network outage'));
+  assert.ok(failed.includes('authorization:github:error:'));
+  console.log('PASS: PKCE, signed/expired/missing sessions, scope, repo permission, popup origin/source, secrets, network errors');
+} finally { globalThis.fetch = originalFetch; }
