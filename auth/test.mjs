@@ -25,6 +25,7 @@ const originalFetch = globalThis.fetch;
 let mayPush = true;
 globalThis.fetch = async (url, options) => {
   requests.push({ url, options });
+  assert.equal(options.headers['User-Agent'], 'R5S-Admin');
   if (url.includes('/access_token')) {
     const body = new URLSearchParams(options.body);
     assert.equal(body.get('code_verifier'), verifier);
@@ -73,5 +74,15 @@ try {
   const failed = await (await call(callback, cookie)).text();
   assert.ok(!failed.includes('test-only network outage'));
   assert.ok(failed.includes('authorization:github:error:'));
+  assert.ok(failed.includes('TOKEN_NETWORK'));
+  globalThis.fetch = async () => new Response('<html>denied</html>', { status: 403 });
+  const denied = await (await call(callback, cookie)).text();
+  assert.ok(denied.includes('TOKEN_HTTP_403'));
+  assert.ok(!denied.includes('<html>denied'));
+  globalThis.fetch = async () => new Response('<html>unexpected</html>', { status: 200 });
+  const invalid = await (await call(callback, cookie)).text();
+  assert.ok(invalid.includes('TOKEN_INVALID_JSON'));
+  globalThis.fetch = async () => Response.json({ error: 'bad_verification_code' });
+  assert.ok((await (await call(callback, cookie)).text()).includes('TOKEN_REJECTED'));
   console.log('PASS: PKCE, signed/expired/missing sessions, scope, repo permission, popup origin/source, secrets, network errors');
 } finally { globalThis.fetch = originalFetch; }
