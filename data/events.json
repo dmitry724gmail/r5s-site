@@ -1,3 +1,16 @@
 {
-  "events": []
+  "events": [
+    {
+      "endDate": "",
+      "time": "19:00",
+      "published": true,
+      "date": "2026-11-06",
+      "hidePast": true,
+      "location": "Москва",
+      "title": "Пробное мероприятие",
+      "link": "",
+      "image": "/assets/uploads/банер-исходник.jpg",
+      "description": "Навка шоу"
+    }
+  ]
 }
