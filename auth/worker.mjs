@@ -65,7 +65,25 @@ if (!openerWindow) {
   });
 }
 async function githubFetch(url, options = {}) {
-  return fetch(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(15000) });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: { 'User-Agent': 'R5S-Admin', ...options.headers },
+      redirect: 'manual',
+      signal: controller.signal,
+    });
+    // Consume the body under the same timeout and reject non-JSON responses safely.
+    const body = await response.text();
+    if (response.status >= 300 && response.status < 400) throw new Error('REDIRECT_' + response.status);
+    if (!response.ok) throw new Error('HTTP_' + response.status);
+    try { return JSON.parse(body); } catch { throw new Error('INVALID_JSON'); }
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('TIMEOUT');
+    if (/^(REDIRECT_\\d{3}|HTTP_\\d{3}|INVALID_JSON)$/.test(error?.message || '')) throw error;
+    throw new Error('NETWORK');
+  } finally { clearTimeout(timer); }
 }
 export default {
   async fetch(request, env) {
@@ -78,6 +96,7 @@ export default {
     }
     if (!['/auth', '/callback'].includes(url.pathname)) return reply('Not found', 404);
     if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return reply('Добавьте GITHUB_CLIENT_ID и GITHUB_CLIENT_SECRET в Cloudflare Secrets.', 503);
+    let stage = 'START';
     try {
       if (url.pathname === '/auth') {
         if (url.searchParams.get('provider') !== 'github' || url.searchParams.get('site_id') !== 'r5s.ru') return reply('Вход разрешён только из редактора r5s.ru.', 400);
@@ -101,23 +120,24 @@ export default {
       if (url.searchParams.has('error')) return popup({ message: 'Вход через GitHub отменён.' }, false);
       const code = url.searchParams.get('code');
       if (!code || code.length > 512) return reply('Отсутствует код авторизации.', 400, { 'Set-Cookie': cookie('', 0) });
-      const response = await githubFetch('https://github.com/login/oauth/access_token', {
+      stage = 'TOKEN';
+      const data = await githubFetch('https://github.com/login/oauth/access_token', {
         method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET, code, redirect_uri: WORKER_ORIGIN + '/callback', code_verifier: session.verifier }).toString(),
       });
-      const data = await response.json();
-      if (!response.ok || data.error || typeof data.access_token !== 'string' || !data.access_token) return popup({ message: 'GitHub не подтвердил вход. Повторите попытку.' }, false);
-      const repoResponse = await githubFetch('https://api.github.com/repos/' + REPO, {
+      if (data.error || typeof data.access_token !== 'string' || !data.access_token) return popup({ message: 'GitHub не подтвердил вход (TOKEN_REJECTED). Проверьте Client ID, Client Secret и callback приложения.' }, false);
+      stage = 'REPOSITORY';
+      const repo = await githubFetch('https://api.github.com/repos/' + REPO, {
         headers: { Authorization: 'Bearer ' + data.access_token, Accept: 'application/vnd.github+json', 'User-Agent': 'R5S-Admin', 'X-GitHub-Api-Version': '2022-11-28' },
       });
-      const repo = await repoResponse.json();
-      if (!repoResponse.ok || repo.full_name?.toLowerCase() !== REPO || repo.permissions?.push !== true) return popup({ message: 'У этого аккаунта нет права редактировать сайт R5S.' }, false);
+      if ( repo.full_name?.toLowerCase() !== REPO || repo.permissions?.push !== true) return popup({ message: 'У этого аккаунта нет права редактировать сайт R5S.' }, false);
       // Only the access token reaches the authenticated CMS popup. No refresh token or client secret is returned.
       // If an expiring token expires, sign out and sign in again through the CMS.
       return popup({ token: data.access_token, provider: 'github' }, true);
-    } catch {
-      // Do not log OAuth responses, callback query strings or credentials.
-      return popup({ message: 'Сервис входа временно недоступен. Повторите попытку.' }, false);
+    } catch (error) {
+      // Only allowlisted diagnostic codes are displayed. No server responses, codes or secrets.
+      const reason = /^(REDIRECT_\d{3}|HTTP_\d{3}|INVALID_JSON|TIMEOUT|NETWORK)$/.test(error?.message || '') ? error.message : 'INTERNAL';
+      return popup({ message: 'Не удалось завершить вход. Код: ' + stage + '_' + reason + '. Сообщите этот код для проверки.' }, false);
     }
   },
 };
