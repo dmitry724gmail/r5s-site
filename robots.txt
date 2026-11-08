@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /admin/
+Disallow: /auth/
+
+Sitemap: https://r5s.ru/sitemap.xml
