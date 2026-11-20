@@ -3,5 +3,5 @@ window.SEASONS_ADMIN = {
   repo: 'dmitry724gmail/r5s-site',
   branch: 'main',
   authServer: 'https://r5s-auth.dmitry724.workers.dev',
-  siteUrl: 'https://r5s.ru/'
+  siteUrl: 'https://resort5seasons.ru/'
 };

@@ -1,6 +1,6 @@
 // Cloudflare Worker for R5S / Decap CMS. Credentials belong in Worker Secrets.
 const WORKER_ORIGIN = 'https://r5s-auth.dmitry724.workers.dev';
-const SITE_ORIGIN = 'https://r5s.ru';
+const SITE_ORIGIN = 'https://resort5seasons.ru';
 const REPO = 'dmitry724gmail/r5s-site';
 const COOKIE = '__Host-r5s-oauth';
 const encoder = new TextEncoder();
@@ -44,7 +44,7 @@ function popup(payload, success) {
 const origin = ${JSON.stringify(SITE_ORIGIN)};
 const openerWindow = window.opener;
 if (!openerWindow) {
-  document.getElementById('status').textContent = 'Откройте вход через https://r5s.ru/admin/';
+  document.getElementById('status').textContent = 'Откройте вход через https://resort5seasons.ru/admin/';
 } else {
   const timer = setTimeout(() => { window.removeEventListener('message', receive); document.getElementById('status').textContent = 'Время ожидания истекло. Повторите вход из админки.'; }, 60000);
   function receive(event) {
@@ -92,14 +92,14 @@ export default {
     if (request.method !== 'GET') return reply('Method not allowed', 405, { Allow: 'GET' });
     if (url.pathname === '/' || url.pathname === '/health') {
       const configured = Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET);
-      return reply(configured ? 'R5S: сервис входа настроен. Откройте https://r5s.ru/admin/ для проверки входа.' : 'R5S: добавьте GITHUB_CLIENT_ID и GITHUB_CLIENT_SECRET в Cloudflare Secrets.', configured ? 200 : 503);
+      return reply(configured ? 'R5S: сервис входа настроен. Откройте https://resort5seasons.ru/admin/ для проверки входа.' : 'R5S: добавьте GITHUB_CLIENT_ID и GITHUB_CLIENT_SECRET в Cloudflare Secrets.', configured ? 200 : 503);
     }
     if (!['/auth', '/callback'].includes(url.pathname)) return reply('Not found', 404);
     if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return reply('Добавьте GITHUB_CLIENT_ID и GITHUB_CLIENT_SECRET в Cloudflare Secrets.', 503);
     let stage = 'START';
     try {
       if (url.pathname === '/auth') {
-        if (url.searchParams.get('provider') !== 'github' || url.searchParams.get('site_id') !== 'r5s.ru') return reply('Вход разрешён только из редактора r5s.ru.', 400);
+        if (url.searchParams.get('provider') !== 'github' || url.searchParams.get('site_id') !== new URL(SITE_ORIGIN).hostname) return reply('Вход разрешён только из редактора resort5seasons.ru.', 400);
         const state = random();
         const verifier = random();
         const target = new URL('https://github.com/login/oauth/authorize');
@@ -116,7 +116,7 @@ export default {
       }
       const session = await readSession(request, env.GITHUB_CLIENT_SECRET);
       const state = url.searchParams.get('state');
-      if (!session || !state || state !== session.state) return reply('Сеанс входа истёк или не совпадает. Закройте окно и повторите вход из https://r5s.ru/admin/', 400, { 'Set-Cookie': cookie('', 0) });
+      if (!session || !state || state !== session.state) return reply('Сеанс входа истёк или не совпадает. Закройте окно и повторите вход из https://resort5seasons.ru/admin/', 400, { 'Set-Cookie': cookie('', 0) });
       if (url.searchParams.has('error')) return popup({ message: 'Вход через GitHub отменён.' }, false);
       const code = url.searchParams.get('code');
       if (!code || code.length > 512) return reply('Отсутствует код авторизации.', 400, { 'Set-Cookie': cookie('', 0) });
